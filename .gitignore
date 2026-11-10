@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+# Prompt original: nombra las plantas de la casa, no va al repo público.
+prompt-claude-code.md
