@@ -17,7 +17,7 @@ Sin servidor propio y gratis: cada teléfono guarda todo primero en el teléfono
 
 El workflow privado ejecuta el código de este repo con tus secrets, así que nadie tiene que poder cambiarlo a escondidas.
 
-- `planthy` → Settings → Rules → Rulesets → **New branch ruleset** → Target: *Default branch* → activá **Restrict deletions**, **Block force pushes** y **Require a pull request before merging**.
+- `planthy` → Settings → Rules → Rulesets → **New branch ruleset** → Target: *Default branch* → activá **Restrict deletions** y **Block force pushes**. Sin "Require a pull request": cada push a `main` se publica directo.
 - Más seguro todavía: en `planthy-data/.github/workflows/recordatorios.yml`, cambiá `APP_REF: main` por el hash de un commit que revisaste. Así el workflow corre ese código exacto hasta que lo actualices vos.
 
 ## 3. Secret de las notificaciones
