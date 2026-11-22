@@ -2,18 +2,29 @@
 // deshacer (aviso de 5 segundos) y a cada registro se le puede cambiar la fecha después.
 
 import { state, cfg, saveCfg, settings, today, byId, logEvents, undoEvents, put, patch, remove, commit, emit } from '../store.js';
-import { stickResult, humidPhrase, fertPending, eventsOf, doseText, displayName, DEPTHS, STICK_RULES, PRODUCT, AIRE } from '../rules.js';
+import { stickResult, stickScale, ruleText, stickTooShort, dryLabel, humidPhrase, fertPending, eventsOf, doseText, displayName, LEGACY_DEPTHS, STICK_CM, PRODUCT, AIRE } from '../rules.js';
 import { fmtDay, fmtShort, relDay } from '../dates.js';
-import { $, esc, icon, on, toast, haptic, openSheet, updateSheet, closeSheet, potSvg, depthLabel, field, readForm, cap, plantTitle } from './dom.js';
+import { $, esc, icon, on, toast, haptic, openSheet, updateSheet, closeSheet, potSvg, field, readForm, cap, plantTitle } from './dom.js';
 
 const plantOf = id => byId('plants', id);
 const pendingFert = (plant, date) => fertPending(plant, eventsOf(state.db, plant.id), date, settings());
 
 /* ---------- textos de cada registro ---------- */
 export const EVENT_ICON = { palito: 'stick', riego: 'drop', fert: 'flask', agua: 'glass', trasplante: 'pot', recalce: 'pot', alta: 'home', nota: 'note', puntas: 'wind' };
+const STICK_WORDS = { 'Un poco': 'seco arriba', Apenas: 'apenas seco arriba' };
+/** "seco hasta 7 cm", "seco hasta la mitad (11 cm)", "todo seco". Entiende las lecturas viejas (id de profundidad). */
+function stickTitle(e) {
+  if (e.dry == null) return e.depth === 'nada' ? 'nada seco' : e.depth === 'todo' ? 'todo seco' : `seco hasta ${(LEGACY_DEPTHS[e.depth]?.label || e.depth || '').toLowerCase()}`;
+  if (e.dry <= 0) return 'nada seco';
+  if (e.dry >= 1) return 'todo seco';
+  if (Math.abs(e.dry - 0.5) < 0.01) return `seco hasta la mitad${e.cm ? ` (${e.cm} cm)` : ''}`;
+  if (e.cm) return `seco hasta ${e.cm} cm`;
+  const w = dryLabel(e.dry);
+  return STICK_WORDS[w] || `seco hasta ${w.toLowerCase()}`;
+}
 export function eventTitle(e) {
   switch (e.type) {
-    case 'palito': return `Palito: ${e.depth === 'nada' ? 'nada seco' : e.depth === 'todo' ? 'todo seco' : `seco hasta ${depthLabel(e.depth).toLowerCase()}`}`;
+    case 'palito': return `Palito: ${stickTitle(e)}`;
     case 'riego': return 'Riego';
     case 'fert': return 'Fertilización';
     case 'agua': return 'Cambio de agua';
@@ -46,11 +57,13 @@ function done(message, events) {
   toast(message, { undo: () => undoEvents(events) });
 }
 
-export function logStick(plantId, depth, date = today(), extra = {}) {
+/** Anota el palito. `dry`: qué parte de la maceta salió seca (0 a 1), una de las opciones de stickScale. */
+export function logStick(plantId, dry, date = today(), extra = {}) {
   const plant = plantOf(plantId);
   if (!plant) return;
-  const result = stickResult(plant, depth);
-  const events = logEvents(plantId, date, [{ type: 'palito', depth, result, ...extra }]);
+  const opt = stickScale(plant).find(o => o.dry === dry);
+  const result = stickResult(plant, dry);
+  const events = logEvents(plantId, date, [{ type: 'palito', dry, ...(opt?.cm != null ? { cm: opt.cm } : {}), result, ...extra }]);
   done(result === 'seco' ? `${displayName(plant)}: toca regar.` : humidPhrase(plant, date, settings()), events);
   return result;
 }
@@ -71,19 +84,43 @@ export function logWaterChange(plantId, withFert, date = today()) {
   done(withFert ? 'Agua nueva, con sus 5 gotas.' : 'Agua nueva. ¡Listo!', logEvents(plantId, date, list));
 }
 
-on('stick', el => logStick(el.dataset.id, el.dataset.depth));
+on('stick', el => logStick(el.dataset.id, Number(el.dataset.dry)));
 on('water', el => logWater(el.dataset.id, el.dataset.fert === '1'));
 on('agua', el => logWaterChange(el.dataset.id, el.dataset.fert === '1'));
 on('puntas', el => {
   const plant = plantOf(el.dataset.id);
   if (!plant) return;
-  done(el.dataset.result === 'secas' ? `Anotado: puntas secas en ${displayName(plant)}.` : `${displayName(plant)}: sin puntas secas.`, logEvents(plant.id, today(), [{ type: 'puntas', result: el.dataset.result }]));
+  const dry = el.dataset.result === 'secas';
+  done(dry ? `Anotado: puntas secas en ${displayName(plant)}.` : `${displayName(plant)}: sin puntas secas.`, logEvents(plant.id, today(), [{ type: 'puntas', result: el.dataset.result }]));
+  if (dry) openPuntasTip(plant);
 });
 
+/* ---------- puntas secas: qué hacer ---------- */
+// El texto de la casa viene en los datos (settings.guide.puntas y, por planta, guide.puntasPlanta). Este es el general.
+export const PUNTAS_TIP = [
+  'Las puntas que ya se secaron no vuelven a ponerse verdes. Si te molestan, cortalas con tijera siguiendo la forma de la hoja y dejá una línea finita de seco, para no lastimar lo verde.',
+  'Lo más común: aire seco, tierra que se secó de más entre riegos, o cloro y sales del agua de la canilla.',
+  'Qué hacer: que no se seque más de lo que pide su regla del palito y regala con agua que reposó de un día para el otro. Si se repite, agrupala con otras plantas para que tenga más humedad alrededor.',
+];
+export function openPuntasTip(plant) {
+  const g = settings().guide || {};
+  const tips = [...(g.puntas?.length ? g.puntas : PUNTAS_TIP), ...(g.puntasPlanta?.[plant.id] ? [g.puntasPlanta[plant.id]] : [])];
+  openSheet(() => `<h2 class="sheet-title">Puntas secas en ${plantTitle(plant)}</h2>
+    <ul class="tips">${tips.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+    <div class="btns col"><button class="btn primary big" data-act="sheet-close">Entendido</button></div>`);
+}
+
 /* ---------- pedazos reutilizables ---------- */
-/** La escala del palito: cinco macetas con la franja seca. */
-export function potScale(plantId, attrs = '') {
-  return `<div class="pots" role="group" aria-label="¿Hasta dónde salió seco?">${DEPTHS.map(d => `<button type="button" class="pot" data-act="stick" data-id="${esc(plantId)}" data-depth="${d.id}" ${attrs}>${potSvg(d.dry)}<span>${d.label}</span></button>`).join('')}</div>`;
+/** La escala del palito de esa planta: cinco macetas con la franja seca, en cm si se sabe la altura. */
+export function potScale(plant, act = 'stick') {
+  return `<div class="pots" role="group" aria-label="¿Hasta dónde salió seco?">${stickScale(plant).map(o => `<button type="button" class="pot" data-act="${act}" data-id="${esc(plant.id)}" data-dry="${o.dry}">${potSvg(o.dry)}<span>${esc(o.label)}</span></button>`).join('')}</div>`;
+}
+/** La regla de la planta, con su nota y el aviso si el palito no llega. Sin altura, invita a cargarla. */
+export function ruleLine(plant) {
+  const text = ruleText(plant);
+  if (!text) return '';
+  const h = Number(plant.potH) > 0;
+  return `<p class="rule">${esc(text)}.${plant.ruleNote ? ` ${esc(plant.ruleNote)}` : ''}${stickTooShort(plant) ? ` El palito tiene que llegar a ${esc(plant.potH)} cm: si el de brochette (${STICK_CM} cm) no llega, usá una varilla más larga.` : ''}${h ? '' : ` <button class="link inline" data-act="plant-edit" data-id="${esc(plant.id)}">Cargá la altura de la maceta</button> y te lo digo en cm.`}</p>`;
 }
 /** Botones de "Regué", con la opción de Fertifox si hay una dosis esperando. */
 export function waterButtons(plant, date = today(), act = 'water') {
@@ -122,9 +159,9 @@ function renderLog() {
   let body = '';
   if (draft.mode === 'palito') {
     body = `<p class="ask">¿Hasta dónde salió seco?</p>
-      <p class="muted small">${esc(STICK_RULES[plant.rule]?.label || '')}</p>
-      <div class="pots">${DEPTHS.map(d => `<button type="button" class="pot" data-act="log-stick" data-depth="${d.id}">${potSvg(d.dry)}<span>${d.label}</span></button>`).join('')}</div>
-      ${field('Humedad ambiente (%), opcional', `<input id="log-hum" type="number" inputmode="numeric" min="0" max="100" placeholder="Del termohigrómetro" value="${cfg.humidity?.date === draft.date ? cfg.humidity.value : ''}">`)}`;
+      <p class="muted small">${esc(ruleText(plant))}.</p>
+      ${potScale(plant, 'log-stick')}
+      ${s.hygro ? field('Humedad ambiente (%), opcional', `<input id="log-hum" type="number" inputmode="numeric" min="0" max="100" placeholder="Del termohigrómetro" value="${cfg.humidity?.date === draft.date ? cfg.humidity.value : ''}">`) : ''}`;
   } else if (draft.mode === 'riego') {
     body = `${fertNote(fert)}${waterButtons(plant, draft.date, soil ? 'log-water' : 'log-agua')}`;
   } else if (draft.mode === 'agua') {
@@ -165,7 +202,7 @@ on('log-stick', el => {
   const hum = parseInt($('#log-hum')?.value, 10);
   const extra = hum >= 0 && hum <= 100 ? { hum } : {};
   if (extra.hum != null && draft.date === today()) { cfg.humidity = { date: draft.date, value: hum }; saveCfg(); }
-  const result = logStick(draft.plantId, el.dataset.depth, draft.date, extra);
+  const result = logStick(draft.plantId, Number(el.dataset.dry), draft.date, extra);
   if (result === 'seco') { draft.mode = 'riego'; updateSheet(); } else closeSheet();
 });
 on('log-water', el => { keepDate(); logWater(draft.plantId, el.dataset.fert === '1', draft.date); closeSheet(); });
@@ -196,8 +233,8 @@ on('event-open', el => {
       <p class="muted">${plant ? plantTitle(plant) + ' · ' : ''}${cap(relDay(e.date, today()))}, ${fmtDay(e.date)}${e.by ? ` · lo anotó ${esc(e.by)}` : ''}</p>
       <form data-submit="event-save" class="form">
         ${field('Fecha', `<input type="date" name="date" value="${e.date}" max="${today()}" required>`)}
-        ${e.type === 'palito' ? field('¿Hasta dónde salió seco?', `<select name="depth">${DEPTHS.map(d => `<option value="${d.id}" ${d.id === e.depth ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`) : ''}
-        ${e.type === 'palito' ? field('Humedad ambiente (%)', `<input type="number" name="hum" inputmode="numeric" min="0" max="100" value="${e.hum ?? ''}" placeholder="Opcional">`) : ''}
+        ${e.type === 'palito' && plant ? field('¿Hasta dónde salió seco?', `<select name="depth">${stickOptions(e, plant)}</select>`) : ''}
+        ${e.type === 'palito' && (settings().hygro || e.hum != null) ? field('Humedad ambiente (%)', `<input type="number" name="hum" inputmode="numeric" min="0" max="100" value="${e.hum ?? ''}" placeholder="Opcional">`) : ''}
         ${e.type === 'fert' ? field('Producto', `<input name="product" value="${esc(e.product || '')}">`) + field('Dosis', `<input name="dose" value="${esc(e.dose || '')}">`) : ''}
         ${e.type === 'trasplante' || e.type === 'recalce' ? field('Sustrato usado', `<input name="substrate" value="${esc(e.substrate || '')}">`) : ''}
         ${field('Nota', `<textarea name="note" rows="2" placeholder="Opcional">${esc(e.note || '')}</textarea>`)}
@@ -205,11 +242,20 @@ on('event-open', el => {
       </form>`;
   });
 });
+// Opciones para corregir una lectura: la escala actual de la planta y, si no coincide, la que se anotó.
+const sameOpt = (o, e) => e.dry != null && Math.abs(o.dry - e.dry) < 0.001 && (o.cm ?? null) === (e.cm ?? null);
+function stickOptions(e, plant) {
+  const scale = stickScale(plant), cur = scale.find(o => sameOpt(o, e));
+  return (cur ? '' : `<option value="keep" selected>${esc(cap(stickTitle(e)))}</option>`)
+    + scale.map(o => `<option value="${o.dry}" ${o === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+}
 on('event-save', form => {
   const f = readForm(form), e = editing, plant = plantOf(e.plantId);
   const next = { ...e, date: f.date || e.date, note: f.note };
-  if (e.type === 'palito') {
-    next.depth = f.depth; if (plant) next.result = stickResult(plant, f.depth);
+  if (e.type === 'palito' && plant) {
+    const o = f.depth && f.depth !== 'keep' ? stickScale(plant).find(x => String(x.dry) === f.depth) : null;
+    // Solo se recalcula si cambió la lectura: lo anotado antes vale con la regla que tenía ese día.
+    if (o) { next.dry = o.dry; if (o.cm != null) next.cm = o.cm; else delete next.cm; delete next.depth; next.result = stickResult(plant, next); }
     const hum = parseInt(f.hum, 10);
     if (hum >= 0 && hum <= 100) next.hum = hum; else delete next.hum;
   }

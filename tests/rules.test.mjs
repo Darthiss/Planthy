@@ -6,6 +6,7 @@ import { firstSunday, nthSunday, sundayIndex, addDays, dow, relDay, addMonths, i
 import {
   stickResult, isRegularDay, recheckDate, plantStatus, fertPending, todayItems, agenda, notificationFor,
   airePending, fotoPending, birthdaysOn, humidPhrase, statusLabel, doseText, cfgOf,
+  thresholdCm, stickScale, ruleText, ruleShort, stickTooShort,
 } from '../js/rules.js';
 import { merge, canon, emptyDoc, normalize } from '../js/merge.js';
 
@@ -42,7 +43,50 @@ test('fechas: domingos del mes', () => {
   assert.equal(relDay('2026-11-15', '2026-11-15'), 'hoy');
 });
 
-test('palito: cada regla se cumple desde su profundidad', () => {
+test('palito: la regla depende de la altura de la tierra', () => {
+  const cm = (rule, potH) => thresholdCm({ rule, potH });
+  assert.equal(cm('cuarto', 20), 5);
+  assert.equal(cm('tercio', 21), 7);
+  assert.equal(cm('superficie', 12), 2); // nunca menos de 2 cm
+  assert.equal(cm('superficie', 30), 5);
+  assert.equal(cm('mitad', 18), 9);
+  assert.equal(cm('fondo', 22), 22);
+  assert.equal(cm('cuarto', null), null);
+  // la misma lectura de 4 cm: seca en una maceta de 10 cm, húmeda en una de 30
+  const four = h => stickResult({ rule: 'cuarto', potH: h }, 4 / h);
+  assert.equal(four(10), 'seco');
+  assert.equal(four(30), 'humedo');
+});
+
+test('palito: escala de cinco opciones por planta, siempre con el corte de la regla', () => {
+  const sc = p => stickScale(p).map(o => o.label);
+  const gom = { rule: 'tercio', potH: 21 };
+  assert.deepEqual(sc(gom), ['Nada', '4 cm', '7 cm', 'Mitad', 'Todo']);
+  assert.deepEqual(stickScale(gom).map(o => stickResult(gom, o.dry)), ['humedo', 'humedo', 'seco', 'seco', 'seco']);
+  assert.deepEqual(stickScale(gom).map(o => o.cm), [0, 4, 7, 11, 21]);
+  assert.deepEqual(sc({ rule: 'fondo', potH: 20 }), ['Nada', '5 cm', 'Mitad', '15 cm', 'Todo']);
+  assert.deepEqual(stickScale({ rule: 'fondo', potH: 20 }).map(o => stickResult({ rule: 'fondo', potH: 20 }, o.dry)), ['humedo', 'humedo', 'humedo', 'humedo', 'seco']);
+  assert.deepEqual(sc({ rule: 'superficie', potH: 4 }), ['Nada', '1 cm', 'Mitad', '3 cm', 'Todo']); // maceta chiquita: el mínimo de 2 cm es la mitad
+  // sin la altura, en palabras
+  assert.deepEqual(sc({ rule: 'tercio' }), ['Nada', 'Apenas', 'Un tercio', 'Mitad', 'Todo']);
+  assert.deepEqual(sc({ rule: 'superficie' }), ['Nada', 'Apenas', 'Un poco', 'Mitad', 'Todo']);
+  assert.deepEqual(sc({ rule: '3-5cm' }), ['Nada', 'Apenas', 'Un cuarto', 'Mitad', 'Todo']); // id viejo
+  assert.deepEqual(sc({ rule: 'mitad' }), ['Nada', 'Un cuarto', 'Mitad', 'Tres cuartos', 'Todo']);
+});
+
+test('palito: la regla dicha para cada maceta', () => {
+  assert.equal(ruleText({ rule: 'tercio', potH: 21 }), 'Regar si salen secos los primeros 7 cm');
+  assert.equal(ruleText({ rule: 'tercio' }), 'Regar si se secó el primer tercio de la tierra');
+  assert.equal(ruleText({ rule: 'mitad', potH: 12 }), 'Regar solo si sale seca hasta la mitad (6 cm)');
+  assert.equal(ruleText({ rule: 'fondo', potH: 30 }), 'Regar solo si el palito sale seco hasta el fondo (30 cm)');
+  assert.equal(ruleShort({ rule: 'cuarto', potH: 16 }), 'Primeros 4 cm');
+  assert.equal(ruleShort({ rule: 'fondo' }), 'Hasta el fondo');
+  assert.equal(ruleText({ group: 'agua', rule: null }), '');
+  assert.ok(stickTooShort({ rule: 'fondo', potH: 30 }));
+  assert.ok(!stickTooShort({ rule: 'fondo', potH: 17 }) && !stickTooShort({ rule: 'mitad', potH: 40 }));
+});
+
+test('palito: las lecturas y reglas viejas (antes del 22/11/2026) siguen valiendo', () => {
   const r = (rule, depth) => stickResult({ rule }, depth);
   assert.deepEqual(['nada', '2cm', '3-5cm', 'mitad', 'todo'].map(d => r('2cm', d)), ['humedo', 'seco', 'seco', 'seco', 'seco']);
   assert.deepEqual(['nada', '2cm', '3-5cm', 'mitad', 'todo'].map(d => r('3-5cm', d)), ['humedo', 'humedo', 'seco', 'seco', 'seco']);

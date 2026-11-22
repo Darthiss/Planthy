@@ -15,22 +15,21 @@ export const GROUPS = {
   agua: { label: 'En agua', when: 'Cambio de agua todos los domingos.' },
 };
 
-// "¿Hasta dónde salió seco?" — `dry` es la parte de la maceta que se dibuja seca.
-export const DEPTHS = [
-  { id: 'nada', label: 'Nada', dry: 0 },
-  { id: '2cm', label: '2 cm', dry: 0.14 },
-  { id: '3-5cm', label: '3–5 cm', dry: 0.3 },
-  { id: 'mitad', label: 'Mitad', dry: 0.5 },
-  { id: 'todo', label: 'Todo', dry: 1 },
-];
-
-// Las cuatro reglas del palito que existen en el informe. `min` = desde qué opción de DEPTHS toca regar.
+// Reglas del palito (informe, sección 2, 22/11/2026): proporcionales a la altura de la tierra, porque 3 cm secos
+// no dicen lo mismo en una maceta de 10 cm que en una de 30. `frac` = qué parte de la altura, desde arriba, tiene
+// que salir seca para regar. Con la altura cargada, la app lo dice en cm (nunca menos de MIN_CM).
 export const STICK_RULES = {
-  '2cm': { min: 1, label: 'Regar si los primeros 2 cm están secos' },
-  '3-5cm': { min: 2, label: 'Regar si los primeros 3–5 cm salen secos' },
-  mitad: { min: 3, label: 'Regar solo si está seca hasta la mitad de la maceta' },
-  fondo: { min: 4, label: 'Regar solo si el palito sale seco hasta el fondo' },
+  superficie: { frac: 0.15, label: 'La parte de arriba (15 %)', share: 'la parte de arriba de la tierra (un 15 %)' },
+  cuarto: { frac: 0.25, label: 'El primer cuarto', share: 'el primer cuarto de la tierra' },
+  tercio: { frac: 1 / 3, label: 'El primer tercio', share: 'el primer tercio de la tierra' },
+  mitad: { frac: 0.5, label: 'Hasta la mitad', share: 'hasta la mitad de la maceta' },
+  fondo: { frac: 1, label: 'Hasta el fondo', share: 'hasta el fondo' },
 };
+export const MIN_CM = 2;
+export const STICK_CM = 25; // largo de un palito de brochette: más allá, no llega al fondo
+// Reglas y lecturas anteriores al 22/11/2026, que siguen en los datos.
+const LEGACY_RULE = { '2cm': 'superficie', '3-5cm': 'cuarto' };
+export const LEGACY_DEPTHS = { nada: { dry: 0, label: 'Nada' }, '2cm': { dry: 0.15, label: '2 cm' }, '3-5cm': { dry: 0.25, label: '3–5 cm' }, mitad: { dry: 0.5, label: 'Mitad' }, todo: { dry: 1, label: 'Todo' } };
 
 export const AIRE = { apagado: 'Apagado', frio: 'Frío', calor: 'Calor' };
 
@@ -42,6 +41,7 @@ export const DEFAULTS = {
   reminderTime: '09:00',
   aire: 'apagado',
   aireSince: null,
+  hygro: false, // hay termohigrómetro en casa: recién ahí la app pregunta la humedad ambiente
 };
 export const cfgOf = data => ({ ...DEFAULTS, ...(data.settings || {}) });
 
@@ -49,12 +49,72 @@ export const displayName = p => (p.nick && p.nick.trim()) || p.name;
 export const activePlants = data => data.plants.filter(p => !p.archived).sort((a, b) => (a.order ?? 999) - (b.order ?? 999) || a.name.localeCompare(b.name, 'es'));
 
 /* ---------- palito ---------- */
-export const depthIndex = id => DEPTHS.findIndex(d => d.id === id);
-/** 'seco' (toca regar) o 'humedo', según la regla de esa planta. */
-export function stickResult(plant, depth) {
-  const rule = STICK_RULES[plant.rule];
-  return rule && depthIndex(depth) >= rule.min ? 'seco' : 'humedo';
+export const ruleId = plant => LEGACY_RULE[plant.rule] || plant.rule;
+export const ruleOf = plant => STICK_RULES[ruleId(plant)] || null;
+/** Altura de la tierra en cm (medida por dentro), o null si no está cargada. */
+export const potHeight = plant => { const h = Number(plant.potH); return h > 0 ? h : null; };
+
+/** Cuántos cm tienen que salir secos para regar. null si no se sabe la altura. */
+export function thresholdCm(plant) {
+  const rule = ruleOf(plant), h = potHeight(plant);
+  if (!rule || !h) return null;
+  return rule.frac >= 1 ? h : Math.min(h, Math.max(MIN_CM, Math.round(rule.frac * h)));
 }
+/** La misma regla como fracción de la altura (con el mínimo en cm ya aplicado). */
+export function thresholdFrac(plant) {
+  const rule = ruleOf(plant), h = potHeight(plant);
+  if (!rule) return null;
+  return h ? thresholdCm(plant) / h : rule.frac;
+}
+
+const round3 = n => Math.round(n * 1000) / 1000;
+const near = (a, b) => Math.abs(a - b) < 0.01;
+const WORDS = [[0.15, 'Un poco'], [0.25, 'Un cuarto'], [1 / 3, 'Un tercio'], [0.5, 'Mitad'], [0.75, 'Tres cuartos']];
+/** Nombre de una lectura: "Nada", "7 cm", "Mitad", "Todo"; sin altura, en palabras. */
+export function dryLabel(dry, h = null) {
+  if (dry <= 0) return 'Nada';
+  if (dry >= 1) return 'Todo';
+  if (near(dry, 0.5)) return 'Mitad';
+  if (h) return `${Math.max(1, Math.round(dry * h))} cm`;
+  return WORDS.find(([f]) => near(f, dry))?.[1] || 'Apenas';
+}
+
+/** Las cinco opciones de "¿Hasta dónde salió seco?" para esa planta: [{ dry, cm, label }]. El corte de la regla siempre está. */
+export function stickScale(plant) {
+  const h = potHeight(plant);
+  const t = thresholdFrac(plant) ?? STICK_RULES.cuarto.frac;
+  const fr = t < 0.5 ? [0, t / 2, t, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+  return fr.map(f => ({ dry: round3(f), cm: h ? Math.round(f * h) : null, label: dryLabel(f, h) }));
+}
+
+/** Qué parte salió seca en una lectura (las viejas guardaban un id de profundidad). */
+export const dryOf = reading => (typeof reading === 'number' ? reading : reading?.dry ?? LEGACY_DEPTHS[reading?.depth ?? reading]?.dry ?? 0);
+
+/** 'seco' (toca regar) o 'humedo', según la regla de esa planta. `reading`: fracción seca (0 a 1) o id viejo. */
+export function stickResult(plant, reading) {
+  const t = thresholdFrac(plant);
+  return t != null && dryOf(reading) >= t - 0.001 ? 'seco' : 'humedo';
+}
+
+/** La regla dicha para esa planta: "Regar si salen secos los primeros 7 cm". */
+export function ruleText(plant) {
+  const rule = ruleOf(plant), h = potHeight(plant), cm = thresholdCm(plant);
+  if (!rule) return '';
+  const id = ruleId(plant);
+  if (id === 'fondo') return `Regar solo si el palito sale seco hasta el fondo${h ? ` (${h} cm)` : ''}`;
+  if (id === 'mitad') return `Regar solo si sale seca hasta la mitad${h ? ` (${cm} cm)` : ' de la maceta'}`;
+  return h ? `Regar si salen secos los primeros ${cm} cm` : `Regar si se secó ${rule.share}`;
+}
+/** Versión corta, para la ficha: "Primeros 7 cm", "Hasta el fondo". */
+export function ruleShort(plant) {
+  const rule = ruleOf(plant), h = potHeight(plant), cm = thresholdCm(plant);
+  if (!rule) return '';
+  const id = ruleId(plant);
+  if (id === 'fondo' || id === 'mitad') return h ? `${rule.label} · ${cm} cm` : rule.label;
+  return h ? `Primeros ${cm} cm` : rule.label;
+}
+/** Si el palito de brochette no llega a donde hay que mirar. */
+export const stickTooShort = plant => { const h = potHeight(plant); return !!h && ruleId(plant) === 'fondo' && h > STICK_CM; };
 
 /* ---------- calendario fijo ---------- */
 const sinceOf = (plant, s) => { const a = plant.since || '', b = s.start || ''; return a > b ? a : b; };

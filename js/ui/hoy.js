@@ -1,11 +1,11 @@
 // Pantalla "Hoy": lo que toca y lo atrasado, con el registro en la misma tarjeta.
 
 import { state, cfg, saveCfg, settings, today, byId, patch, commit, emit, setSetting, put, remove } from '../store.js';
-import { agenda, statusLabel, STICK_RULES, tasksDue, birthdaysOn, AIRE } from '../rules.js';
+import { agenda, statusLabel, tasksDue, birthdaysOn, AIRE } from '../rules.js';
 import { fmtLong, relDay, addDays, fmtShort } from '../dates.js';
 import { newId } from '../merge.js';
 import { esc, icon, on, avatar, plantTitle, cap, haptic, toast, celebrate, openSheet, closeSheet } from './dom.js';
-import { potScale, waterButtons, fertNote, eventTitle, EVENT_ICON } from './registro.js';
+import { potScale, ruleLine, waterButtons, fertNote, eventTitle, EVENT_ICON } from './registro.js';
 import { syncOn, tokenDaysLeft } from '../sync.js';
 import { summarize } from './calendario.js';
 
@@ -63,20 +63,19 @@ function plantCard(it, t) {
     </article>`;
   }
   // revisar · recheck · calor: el palito decide
-  const rule = STICK_RULES[p.rule];
   return `<article class="card task k-${it.kind}" ${vt(p.id)}>${head(p, label, it.kind, it.overdue)}
-    ${rule ? `<p class="rule">${esc(rule.label)}.${p.ruleNote ? ` ${esc(p.ruleNote)}` : ''}</p>` : ''}
+    ${ruleLine(p)}
     ${fertNote(it.fert)}
     <p class="ask">¿Hasta dónde salió seco?</p>
-    ${potScale(p.id)}
+    ${potScale(p)}
   </article>`;
 }
 
 function puntasCard(it, t) {
   const s = settings();
   return `<article class="card task k-puntas" ${vt('puntas')}>
-    <header class="task-head"><span class="who">${icon('wind', 'lead')}<span><b>Puntas secas</b><small>El aire está en ${esc(AIRE[s.aire]?.toLowerCase() || '')}</small></span></span><span class="pill k-puntas${it.overdue ? ' late' : ''}">${it.overdue ? 'Pendiente' : 'Esta semana'}</span></header>
-    <p class="rule">Son las más sensibles al aire seco. Fijate si tienen puntas secas.</p>
+    <header class="task-head"><span class="who">${icon('wind', 'lead')}<span><b>Puntas secas</b><small>Con el aire en ${esc(AIRE[s.aire]?.toLowerCase() || '')}</small></span></span><span class="pill k-puntas${it.overdue ? ' late' : ''}">${it.overdue ? 'Pendiente' : 'Esta semana'}</span></header>
+    <p class="rule">Son las más sensibles al aire seco. Si tienen puntas secas, te digo qué hacer.</p>
     <ul class="mini">${it.plants.map(p => `<li>${avatar(p, 'xs')}<span>${plantTitle(p)}</span>
       <button class="chip" data-act="puntas" data-id="${esc(p.id)}" data-result="bien">${icon('check')}Bien</button>
       <button class="chip warn" data-act="puntas" data-id="${esc(p.id)}" data-result="secas">Puntas secas</button></li>`).join('')}</ul>
@@ -108,20 +107,22 @@ function banners(t) {
   for (const b of birthdaysOn(state.db, t)) {
     out.push(`<div class="banner party">${icon('cake')}<span><b>¡${plantTitle(b.plant)} cumple ${b.years} ${b.years === 1 ? 'año' : 'años'} en casa!</b><small>Llegó el ${fmtShort(b.plant.birthday)}.</small></span></div>`);
   }
-  const hum = cfg.humidity?.date === t ? cfg.humidity.value : null;
+  const hum = settings().hygro && cfg.humidity?.date === t ? cfg.humidity.value : null;
   if (hum != null && hum < 40) {
     out.push(`<div class="banner tip">${icon('drop')}<span><b>Humedad del ${hum} %</b><small>${esc(settings().guide?.humedadTip || 'Humedad baja: agrupá las plantas o usá un humidificador.')}</small></span></div>`);
   }
   return out.join('');
 }
 
+// Arriba de Hoy: el clima del día se carga solo (no es un botón); el aire es de temporada y se toca solo para
+// cambiarlo; la humedad aparece solo si en Ajustes dijeron que hay termohigrómetro.
 function chips(t) {
   const s = settings(), w = state.weather?.daily?.[t];
   const hum = cfg.humidity?.date === t ? cfg.humidity.value : null;
   return `<div class="chips">
-    <button class="chip glass" data-act="aire-open">${icon(AIRE_ICON[s.aire] || 'off')}Aire: ${esc(AIRE[s.aire] || 'Apagado')}</button>
-    <button class="chip glass" data-act="hum-open">${icon('drop')}${hum != null ? `${hum} %` : 'Humedad'}</button>
-    ${typeof w === 'number' ? `<span class="chip glass static${w > Number(s.heat) ? ' hot' : ''}">${icon('thermo')}Máx. ${Math.round(w)} °C</span>` : ''}
+    ${typeof w === 'number' ? `<span class="chip plain${w > Number(s.heat) ? ' hot' : ''}">${icon('thermo')}Hoy, máx. ${Math.round(w)} °C</span>` : ''}
+    <button class="chip glass" data-act="aire-open">${icon(AIRE_ICON[s.aire] || 'off')}Aire acondicionado: ${esc((AIRE[s.aire] || 'Apagado').toLowerCase())}</button>
+    ${s.hygro ? `<button class="chip glass" data-act="hum-open">${icon('drop')}${hum != null ? `Humedad: ${hum} %` : 'Anotar humedad'}</button>` : ''}
   </div>`;
 }
 
@@ -175,8 +176,8 @@ export function setAire(value) {
 on('aire-open', () => {
   openSheet(() => {
     const s = settings();
-    return `<h2 class="sheet-title">Modo aire</h2>
-      <p class="muted">Cambialo cuando empieza o termina la temporada del aire. No hace falta tocarlo todos los días.</p>
+    return `<h2 class="sheet-title">Aire acondicionado</h2>
+      <p class="muted">Es por temporada, no por día: cambialo cuando empezás o dejás de usar el aire.</p>
       <div class="choice">${Object.entries(AIRE).map(([v, l]) => `<button class="opt${s.aire === v ? ' on' : ''}" data-act="aire-set" data-v="${v}">${icon(AIRE_ICON[v])}<span><b>${l}</b><small>${v === 'apagado' ? 'Sin cambios en las reglas.' : v === 'frio' ? 'Tarjeta semanal para mirar puntas secas.' : 'Puntas secas cada semana y, de abril a septiembre, el grupo semanal se revisa todos los domingos.'}</small></span></button>`).join('')}</div>`;
   }, { live: true });
 });

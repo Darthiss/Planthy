@@ -1,6 +1,6 @@
 // Utilidades de interfaz: plantillas, acciones por delegación, hojas, avisos con "Deshacer" y pequeños dibujos.
 
-import { DEPTHS, displayName } from '../rules.js';
+import { displayName } from '../rules.js';
 import { hydrate } from '../photos.js';
 
 export const $ = (sel, root = document) => root.querySelector(sel);
@@ -130,7 +130,6 @@ export function potSvg(dry) {
   const y = 14 + 33.4 * dry;
   return `<svg class="potsvg" viewBox="0 0 48 52" aria-hidden="true"><g clip-path="url(#pot-clip)"><rect class="wet" width="48" height="52"/><rect class="dry" width="48" height="${y.toFixed(1)}"/>${dry > 0 && dry < 1 ? `<path class="edge" d="M6 ${y.toFixed(1)}h36"/>` : ''}</g><path class="wall" d="${POT}"/><rect class="rim" x="5" y="8" width="38" height="7" rx="3.5"/></svg>`;
 }
-export const depthLabel = id => DEPTHS.find(d => d.id === id)?.label || id;
 
 const hash = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; };
 /** Foto de perfil de la planta, o una hojita de color si todavía no tiene. */

@@ -13,7 +13,7 @@ import { refreshWeather } from '../weather.js';
 import { setAire } from './hoy.js';
 
 export const title = 'Ajustes';
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 const AIRE_ICON = { apagado: 'off', frio: 'snow', calor: 'flame' };
 
 const row = (act, ic, label, value = '', extra = '') => `<button class="row" data-act="${act}" ${extra}>${icon(ic, 'lead')}<span class="grow">${label}</span><span class="val">${value}</span>${icon('chev', 'dim')}</button>`;
@@ -64,8 +64,9 @@ export function render() {
 
     <h2 class="grp">Casa</h2>
     <div class="card rows">
-      <div class="row static col">${icon('wind', 'lead')}<span class="grow"><b>Modo aire</b><small>Lo cambiás cuando empieza o termina la temporada.</small></span></div>
+      <div class="row static col">${icon('wind', 'lead')}<span class="grow"><b>Aire acondicionado</b><small>Lo cambiás cuando empieza o termina la temporada.</small></span></div>
       <div class="row static"><div class="seg solo full">${Object.entries(AIRE).map(([v, l]) => `<button class="${s.aire === v ? 'on' : ''}" data-act="aire-quick" data-v="${v}">${icon(AIRE_ICON[v])}${l}</button>`).join('')}</div></div>
+      <label class="row">${icon('drop', 'lead')}<span class="grow"><b>Tengo termohigrómetro</b><small>Para anotar la humedad ambiente. Si no tenés, no hace falta.</small></span><input type="checkbox" switch data-change="hygro" ${s.hygro ? 'checked' : ''}></label>
       ${row('heat-open', 'thermo', 'Umbral de calor', `${esc(s.heat)} °C`)}
       ${row('place-open', 'pin', 'Ubicación para el clima', esc(s.location?.name || 'Buenos Aires'))}
       ${row('time-open', 'clock', 'Hora de los recordatorios', esc(s.reminderTime || '09:00'))}
@@ -117,6 +118,7 @@ on('who-save', form => { cfg.who = readForm(form).who; saveCfg(); refreshPush();
 
 /* ---------- casa ---------- */
 on('aire-quick', el => setAire(el.dataset.v));
+on('hygro', el => { setSetting('hygro', !!el.checked); commit(); haptic(); });
 on('heat-open', () => openSheet(() => `<h2 class="sheet-title">Umbral de calor</h2>
   <p class="muted">Si la máxima del lunes, el martes o el miércoles supera este número, el miércoles te pido revisar las plantas que lo necesitan.</p>
   <form class="form" data-submit="heat-save">${field('Grados', `<input name="heat" type="number" inputmode="decimal" step="0.5" min="20" max="45" value="${esc(settings().heat)}" required>`)}<button class="btn primary big">Guardar</button></form>`));

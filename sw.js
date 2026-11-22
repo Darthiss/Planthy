@@ -1,7 +1,7 @@
 // Service worker: la app funciona sin conexión y muestra las notificaciones.
 // Cambiá VERSION cada vez que publiques cambios: los teléfonos bajan la versión nueva completa y la usan
 // desde la próxima vez que abren la app (nunca mezclan archivos de dos versiones).
-const VERSION = 'planthy-v1.0.0';
+const VERSION = 'planthy-v1.1.0';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './icons/icon.svg', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
